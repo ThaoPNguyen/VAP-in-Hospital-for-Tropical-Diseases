@@ -1,0 +1,709 @@
+---
+title: "![](LogoBVBND.png){width=1.25in}"
+author: "REGISTRY VIETNAM"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+header-includes:
+- \usepackage{fancyhdr}
+- \pagestyle{fancy}
+- \usepackage{graphicx}
+- \usepackage{newunicodechar}
+- \usepackage[utf8]{inputenc}
+- \DeclareUnicodeCharacter{2265}{\ensuremath{\geq}}
+- \renewcommand{\headrulewidth}{0pt}
+- \renewcommand{\footrulewidth}{0pt}
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+subtitle: \includegraphics[width=1in,height=1in]{logo.png}
+geometry: "left=1.2cm,right=1cm,top=1.5cm,bottom=1.5cm"
+---
+
+```{r, echo=FALSE}
+htmltools::img(src = knitr::image_uri(file.path("logo.png")), 
+               alt = 'logo', 
+               style = 'position:absolute; top:0; right:0; padding:10px;')
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, 
+                      fig.cap = " ", size = "tiny")
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(gsubfn)
+library(stringr)
+library(xlsx)
+library(kableExtra)
+library(gtsummary)
+library(writexl)
+library(zoo)
+library(reticulate)
+library(knitr)
+library(tableone)
+library(qwraps2)
+library(fuzzyjoin)
+library(lubridate)
+library(scales) # to access breaks/formatting functions
+library(reshape2)
+library(tidyr)
+library(broom)
+library(magrittr)
+library(ggplot2)
+library(maptools)
+library(rgdal)
+library(unikn)
+library(scales)
+library(flextable)
+library(tibble)
+library(anytime)
+library(ggpattern)
+library(gridExtra)
+library(gt)
+library(officer)
+library(data.table)
+library(rlist)
+library(glue)
+library(data.table)
+setwd("C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis")
+options("scipen"=100, "digits"=4)
+options(qwraps2_markup = 'markdown')
+set_flextable_defaults(fonts_ignore = TRUE)
+```
+
+```{r diagnosis}
+##Admission
+admissionfiles <- list.files(path = "C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis/Antibiotics",
+                            recursive = TRUE,
+                            pattern = "\\CoreForms.csv$",
+                            full.names = TRUE)
+
+admission_data = do.call(rbind, lapply(admissionfiles, function(x) read.csv(x, stringsAsFactors = FALSE)))
+
+##Daily
+
+clean_admission_data <-
+  function(admission_data) {
+    # Disease, every patient pick only one Prioritise disease (in the code order)
+  	disease <- 
+    admission_data %>% 
+    select(patient_id, starts_with("Admission.disorder")) %>%
+    pivot_longer(cols = starts_with("Admission.disorder")) %>% 
+    mutate(value = tolower(value)) %>%
+    filter(!grepl("vaccination|vaccine", value)) %>%
+    mutate(Disease = case_when(grepl("covid", value) ~ "COVID-19",
+    													 grepl("tetanus", value) ~ "Tetanus",
+    													 grepl("sepsis|septic shock", value) ~ "Sepsis",
+    													 grepl("dengue", value) ~ "Dengue",
+                               grepl("tuberculosis", value) ~ "Tuberculosis",
+                               grepl("malaria", value) ~ "Malaria",
+                               grepl("rabies", value) ~ "Rabies",
+                               grepl("yellow fever", value) ~ "Yellow fever",
+                               grepl("encephalitis", value) ~ "Acute encephalitis",
+                               grepl("hepatitis", value) ~ "Acute infectious hepatitis",
+                               grepl("meningitis", value) ~ "Acute meningitis",
+                               grepl("poliomyelitis", value) ~ "Acute poliomyelitis",
+                               grepl("botulism", value) ~ "Botulism",
+                               grepl("brucellosis", value) ~ "Brucellosis",
+                               grepl("cholera", value) ~ "Cholera",
+                               grepl("diphtheria", value) ~ "Diphtheria",
+                               grepl("enteric fever|typhoid fever", value) ~ "Enteric fever (typhoid or paratyphoid fever)",
+                               grepl("haemolytic uraemic syndrome", value) ~ "Haemolytic uraemic syndrome (HUS)",
+                               grepl("diarrhoea", value) ~ "Infectious bloody diarrhoea",
+                               grepl("streptococcal", value) ~ "Invasive group A streptococcal disease",
+                               grepl("legionnaires", value) ~ "Legionnaires’ disease",
+                               grepl("leprosy", value) ~ "Leprosy",
+                               grepl("measles", value) ~ "Measles",
+                               grepl("meningococcal septicaemia", value) ~ "Meningococcal septicaemia",
+                               grepl("mumps", value) ~ "Mumps",
+                               grepl("plague", value) ~ "Plague",
+                               grepl("rubella", value) ~ "Rubella",
+                               grepl("severe acute respiratory syndrome|sars", value) ~ "Severe Acute Respiratory Syndrome (SARS)",
+                               grepl("scarlet", value) ~ "Scarlet fever",
+                               grepl("smallpox", value) ~ "Smallpox",
+                               grepl("typhus", value) ~ "Typhus",
+                               grepl("viral haemorrhagic fever", value) ~ "Viral haemorrhagic fever (VHF)",
+                               grepl("whooping cough", value) ~ "Whooping cough",
+                               grepl("yellow fever", value) ~ "Yellow fever", TRUE ~ "Others")) %>% 
+    filter(!is.na(Disease)) %>% 
+    distinct(patient_id, Disease) %>% group_by(patient_id) %>% filter(row_number() == 1)
+
+    
+    # Variables we need to calculate for later
+    admission_data <- admission_data %>%
+      mutate_at(c("date_of_admission", "Discharge.date_of_discharge", "date_of_admission_hospital", "Discharge.date_of_hospital_discharge"),
+                ~as.Date(.,"%Y-%m-%d")) %>%
+      mutate(
+        # This age variable is a bit messed up.
+        # String splitting on comma to get years, then parsing to get number instead of string.
+        Admission.age = str_replace(Admission.age, ",.*$", ""),
+        Admission.age = parse_number(Admission.age),
+        # Then assuming missing values are because the patient is less than a year old.
+        Admission.age = if_else(is.na(Admission.age), 0, Admission.age),
+        # 3 variables used to plot time ranges on graphs.
+        hos_disch_status = if_else(Discharge.discharge_status_hos == "Dead" |
+                                     Discharge.discharge_status == "Dead",
+                                   "Dead", "Alive", "Alive"),
+        # Discharge home. Not sure if end of life care counts.
+        disch_home = if_else(Discharge.discharge_destination %in%
+                               c("Home", "Discharge home for end of life care"), 1L, 0L),
+        disch_other_facility = if_else(Discharge.discharge_destination %in%
+                                         c("Transfer for specialist care",
+                                           "Others",
+                                           "Other hospital"), 1L, 0L, as.integer(NA)),
+        # Adding one so all days count.
+        los = as.integer(difftime(Discharge.date_of_discharge, date_of_admission,
+                                  units = "days") + 1),
+        hos_los = as.integer(difftime(Discharge.date_of_hospital_discharge, date_of_admission_hospital,
+                                      units = "days") + 1),
+        mech_vent = if_else(AdmissionAssessment.mechanically_ventilated == "mechanical_vent" |
+                              AdmissionAssessment.mechanically_ventilated == "Non invasive vent",
+                            1L, 0L, 0L),
+        inv_mech_vent = 
+          if_else(AdmissionAssessment.mechanically_ventilated == "mechanical_vent" &
+                    !AdmissionAssessment.mechanically_ventilated_source %in%
+                    c("Non invasive vent", "NIV Mask", "Own airway", 
+                      "High flow oxygen (min flow 30/min)",
+                      "High-flow oxygen delivered via a specialized device, with FiO2 > 0.4 and at a flow rate of at least 30 L/min"), 1L, 0L, 0L),
+        niv = if_else(AdmissionAssessment.mechanically_ventilated_source %in%
+                        c("Non invasive vent", "NIV Mask", "Non invasive vent | Tracheostomy") |
+                        AdmissionAssessment.mechanically_ventilated == "Non invasive vent",
+                      1L, 0L, 0L),
+        tracheostomy = if_else(
+          AdmissionAssessment.mechanically_ventilated_source %in% c("Tracheostomy", "Non invasive vent | Tracheostomy",
+                                                                    "Tracheostomy tube"),
+          1L, 0L, 0L),
+        vasoactive = case_when(AdmissionAssessment.vasoactive_drugs %in%
+                                 c('1', '2', 'More than 2') |
+                                 AdmissionAssessment.cardiovascular_support == 'Yes' |
+                                 !is.na(AdmissionAssessment.vasoactive_therapy) ~ 1L,
+                               AdmissionAssessment.vasoactive_drugs == 'None' |
+                                 AdmissionAssessment.cardiovascular_support == 'No'  ~ 0L,
+                               TRUE ~ as.integer(NA)),
+        
+        renal_replacement = if_else(AdmissionAssessment.renal_replacement == "Yes",
+                                    1L, 0L, 0L),
+        antibiotics = if_else(AdmissionAssessment.antibiotics == "Yes", 1L, 0L, 0L),
+        planned = case_when(
+          Admission.admission_type == "Planned" ~ 1L,
+          Admission.emergency_surgery == "Yes" ~ 0L,
+          Admission.diagnosis_type == "Non operative" & Admission.diagnosis_type2 == "Non operative" ~ 0L,
+          Admission.emergency_surgery == "No" ~ 1L,
+          TRUE ~ 0L),
+        admission_source = case_when(
+          str_detect(Admission.source_of_admission, "ED") ~ 'Emergency department',
+          str_detect(Admission.source_of_admission, "ICU/HDU") ~ 'ICU/HDU',
+          str_detect(Admission.source_of_admission, "Ward") ~  'Ward',
+          str_detect(Admission.source_of_admission, "Operating theatre") ~ 'Operating theatre',
+          is.na(Admission.source_of_admission) ~ as.character(NA)),
+        admission_source = factor(admission_source,
+                                  levels = c("Ward", "Operating theatre",
+                                             "Emergency department", "ICU/HDU"))) %>%
+    	left_join(disease, by = "patient_id")
+    # Filtering for discharge dates.
+    admission_data <-
+      admission_data %>% 
+      # Getting rid of people with negative lengths of stay.
+      filter(Discharge.date_of_discharge >= date_of_admission)
+
+    admission_data
+    }
+
+admission_data <- clean_admission_data(admission_data)
+
+```
+
+```{r, warning=FALSE}
+
+##Transforming data
+
+dailyfiles <- list.files(path = "C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis/Antibiotics",
+												 recursive = TRUE,
+												 pattern = "\\Daily_Q_Assessment_and_Daily_Assessment.csv$",
+												 full.names = TRUE)
+
+daily_data = do.call(rbind, lapply(dailyfiles, function(x) read.csv(x, stringsAsFactors = FALSE)))
+
+clean_daily_data <- function(admission_data, daily_data){
+  
+  # Filtering for the patient ids we need.
+  daily_data <- daily_data %>%
+    filter(patient_id %in% admission_data$patient_id)
+  # Variables which need to be in daily (In Registry code, after left_join() the daily_data gets duplicated date_of_daily_assessment)
+  data_from_admission <-
+    admission_data %>%
+    select(patient_id,Discharge.date_of_discharge,
+           Discharge.date_of_hospital_discharge, Disease)
+  daily_data <- daily_data %>% 
+    left_join(data_from_admission, ., by = "patient_id")
+  
+  # daily ventilation.
+  daily_data <- daily_data %>%
+    mutate_at(vars(c("date_of_admission", "date_of_admission_hospital", "DailyAssessment.date_of_daily_assessment"),
+                   starts_with("DailyAssessment.culture_date")),
+              ~as.Date(.,"%Y-%m-%d")) %>%
+    mutate(mech_vent = if_else(DailyAssessment.mechanically_ventilated == "mechanical_vent" | 
+                                 DailyAssessment.mechanically_ventilated == "Non invasive vent",
+                               1L, 0L, 0L),
+           inv_mech_vent = if_else(
+             DailyAssessment.mechanically_ventilated == "mechanical_vent" &
+               !DailyAssessment.mechanically_ventilated_source %in%
+               c("Non invasive vent", "NIV Mask", "Own airway", "High flow oxygen (min flow 30/min)"), 1L, 0L, as.integer(NA)),
+           niv = if_else(DailyAssessment.mechanically_ventilated_source %in%
+                           c("Non invasive vent", "NIV Mask", "Non invasive vent | Tracheostomy") |
+                           DailyAssessment.mechanically_ventilated == "Non invasive vent", 1L, 0L, as.integer(NA)),
+           renal_replacement = if_else(DailyAssessment.renal_replacement == "Yes",
+                                       1L, 0L, 0L),
+           tracheostomy = if_else(
+             DailyAssessment.mechanically_ventilated_source %in% c("Tracheostomy", "Non invasive vent | Tracheostomy", 
+                                                                   "Tracheostomy tube"), 
+             1L, 0L, 0L),
+           cvc = if_else(DailyAssessment.central_venous_catheter %in% c("New","Insitu"), 1L, 0L,
+                         as.integer(NA)),
+           vte_prophylaxis = case_when(
+             (mech_vent == 0 |
+                !(is.na(DailyAssessment.contraindication) | DailyAssessment.contraindication == "None")) ~
+               as.integer(NA),
+             mech_vent == 1 &
+               DailyAssessment.vte_prophylaxis %in% c("Mechanical", "Both", "Pharmacological") ~ 1L,
+             TRUE ~ 0L),
+           stress_ulcer_prophylaxis = case_when(
+             mech_vent == 0 ~ as.integer(NA),
+             mech_vent == 1 & DailyAssessment.stress_ulcer_prophylaxis == "Yes" ~ 1L,
+             TRUE ~ 0L),
+           sbt = case_when(
+             mech_vent == 0 ~ as.integer(NA),
+             mech_vent == 1 & DailyAssessment.sbt == "Yes" ~ 1L,
+             TRUE ~ 0L),
+           head_of_bed = case_when(
+             mech_vent == 0 ~ as.integer(NA),
+             mech_vent == 1 & DailyAssessment.daily_position_hob == "Yes" ~ 1L,
+             TRUE ~ 0L),
+           sat = case_when(
+             mech_vent == 0 | DailyAssessment.sedated_on_admission != "Yes" ~ as.integer(NA),
+             mech_vent == 1 & DailyAssessment.sedated_on_admission == "Yes" &
+               DailyAssessment.daily_sat == "Yes" ~ 1L,
+             TRUE ~ 0L),
+           rass = case_when(
+             mech_vent == 0 ~ as.integer(NA),
+             mech_vent == 1 & !is.na(as.numeric(DailyAssessment.daily_rass_target)) ~ 1L,
+             TRUE ~ 0L),
+           rass_actual = case_when(
+             mech_vent == 0 ~ as.integer(NA),
+             mech_vent == 1 & !is.na(as.numeric(DailyAssessment.daily_rass_actual)) ~ 1L,
+             TRUE ~ 0L), 
+           delta_rass = if_else(!is.na(DailyAssessment.daily_rass_target) & !is.na(DailyAssessment.daily_rass_actual), as.integer(DailyAssessment.daily_rass_target) - as.integer(DailyAssessment.daily_rass_actual), as.integer(NA)),
+           mobilisation = case_when(
+             mech_vent == 0 | DailyAssessment.daily_mobilisation == "Patient not eligible" ~ as.integer(NA),
+             mech_vent == 1 & DailyAssessment.daily_mobilisation %in% c("On bed PT","Out of bed PT") ~ 1L,
+             TRUE ~ 0L),
+           antibiotics = if_else(DailyAssessment.antibiotics == "Yes", 1L, 0L, 0L),
+    			 newinfiltrate = if_else(DailyAssessment.chest_xray_new_infiltrate == "Yes", 1L, 0L, 0L),
+    			 cultureobtain = if_else(DailyAssessment.culture_obtained == "Yes", 1L, 0L, 0L)) %>% 
+  	mutate_at(vars(starts_with("DailyAssessment.hos_acquired")), ~if_else(. == "Yes", 1L, 0L, 0L))
+  
+  # Select necessary variables only for memory.
+  daily_data <- daily_data %>%
+    select(patient_id, Disease, unitId, date_of_admission, Discharge.date_of_discharge, DailyAssessment.date_of_daily_assessment,
+           DailyAssessment.mechanically_ventilated, DailyAssessment.mechanically_ventilated_source,
+           DailyAssessment.oxygen_saturation,
+           DailyAssessment.cardiovascular_support, DailyAssessment.fraction_inspired_oxygen,
+           DailyAssessment.partial_pressure_arterial_oxygen,
+           Discharge.date_of_hospital_discharge, DailyAssessment.temperature, DailyAssessment.lowest_wcc,
+           DailyAssessment.highest_wcc, DailyAssessment.pressure_sore, DailyAssessment.urinary_catheterization,
+           mech_vent, inv_mech_vent, niv, tracheostomy, renal_replacement, cvc, vte_prophylaxis, stress_ulcer_prophylaxis,
+           sbt, head_of_bed, sat, rass, rass_actual, delta_rass, mobilisation, antibiotics, cultureobtain, newinfiltrate, starts_with("DailyAssessment.infection"), starts_with("DailyAssessment.source"), starts_with("DailyAssessment.hos_acquired"), DailyAssessment.culture_obtained, starts_with("DailyAssessment.type_of_newculture"),
+           starts_with("DailyAssessment.positive_culture"), starts_with("DailyAssessment.culture_report"),
+           starts_with("DailyAssessment.culture_date"), starts_with("DailyAssessment.type_of_culture",),
+           starts_with("DailyAssessment.organism"), starts_with("DailyAssessment.name_of_the_antibiotic"),
+           starts_with("DailyAssessment.culture_obtained"),
+    			 starts_with("DailyAssessment.cfu"))
+  
+  if(nrow(admission_data) == 0){
+    warning("There is no daily data for the specified date range and registry")
+  }
+  
+  # Again, only keeping unique daily forms by day.
+  daily_data <- daily_data %>% 
+    distinct(patient_id, DailyAssessment.date_of_daily_assessment, .keep_all = TRUE)
+  
+  daily_data
+}
+
+
+daily_data <- clean_daily_data(admission_data,daily_data)
+
+```
+
+```{r, VAP count}
+
+##IVAC classification
+antibiotic_commencement <- function(daily_data){
+  
+  check_anti <- 
+    daily_data %>%
+    select(patient_id, antibiotic_commenced_date = DailyAssessment.date_of_daily_assessment, 
+           antibiotics,
+           starts_with("DailyAssessment.name_of_the_antibiotic"))
+  
+  check_anti <- as.data.table(check_anti)
+  # 
+  check_anti_long <- 
+    melt(check_anti, 
+         measure = patterns("^DailyAssessment.name_of_the_antibiotic"),
+         value.name = c("DailyAssessment.name_of_the_antibiotic")) %>% 
+    filter(antibiotics == 1) %>%
+    mutate(antibiotic_commenced_date = as.Date(antibiotic_commenced_date)) %>% 
+    arrange(patient_id, antibiotic_commenced_date, 
+            DailyAssessment.name_of_the_antibiotic) %>% 
+    distinct(patient_id, DailyAssessment.name_of_the_antibiotic, .keep_all = TRUE) %>% 
+    distinct(patient_id, antibiotic_commenced_date) %>% 
+    mutate(antibiotic_commenced = 1L)
+  
+  check_anti_long
+}
+
+ivac_calculation <- function(admission_data, daily_data){
+  # Eligibility, add before pre_mech_vent to get 48h (Registry code has only 1 day)
+  ivac_eligible <- daily_data %>% 
+    group_by(patient_id) %>%
+    mutate(prev_mech_vent = lag(mech_vent, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+    			 before_mech_vent = lag(lag(mech_vent, n = 1L, order_by = DailyAssessment.date_of_daily_assessment), n = 1L,
+    			 													 order_by = DailyAssessment.date_of_daily_assessment)) %>%
+  	select(patient_id, mech_vent, prev_mech_vent, before_mech_vent, DailyAssessment.mechanically_ventilated, DailyAssessment.date_of_daily_assessment, Disease) %>%
+  	filter(mech_vent == 1 & prev_mech_vent & before_mech_vent) %>% 
+  	select(patient_id, eligible_date = DailyAssessment.date_of_daily_assessment, Disease) %>% as.data.table()
+  
+  # Condition 1
+  
+  anti_commenced <- antibiotic_commencement(daily_data) %>% as.data.table()
+  
+  # Condition 2
+  # Infection
+  fever <- daily_data %>% 
+    filter((DailyAssessment.temperature > 38 | DailyAssessment.temperature < 36) |
+           (DailyAssessment.lowest_wcc > 12 | DailyAssessment.lowest_wcc < 4) |
+           (DailyAssessment.highest_wcc > 12 | DailyAssessment.highest_wcc < 4))
+  
+  ##this for making summary table
+  
+  fever_tb <- select(fever, patient_id, DailyAssessment.date_of_daily_assessment, DailyAssessment.temperature, DailyAssessment.lowest_wcc, DailyAssessment.highest_wcc)
+  
+  ##this for counting VAP
+  fever <- fever %>% 
+  	select(patient_id, infection_date = DailyAssessment.date_of_daily_assessment) %>% as.data.table()
+  
+  # Condition 3 worsening oxygen
+  diffs <- daily_data %>% 
+    group_by(patient_id) %>%
+    mutate(prev_fio2 = lag(DailyAssessment.fraction_inspired_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+    			 before_prev_fio2 = lag(lag(DailyAssessment.fraction_inspired_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment), n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+           # NOT A MISTAKE. PEEP is stored in this variable at the moment. Check and fix later. 
+           prev_peep = lag(DailyAssessment.partial_pressure_arterial_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+    			 before_prev_peep = lag(lag(DailyAssessment.partial_pressure_arterial_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment), n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment)) %>%
+  	select(patient_id, DailyAssessment.date_of_daily_assessment, DailyAssessment.fraction_inspired_oxygen, DailyAssessment.partial_pressure_arterial_oxygen, prev_fio2:before_prev_peep) %>% 
+  	filter((DailyAssessment.fraction_inspired_oxygen - prev_fio2 >= 0.2 & DailyAssessment.fraction_inspired_oxygen - before_prev_fio2 >= 0.2)
+           | (DailyAssessment.partial_pressure_arterial_oxygen - prev_peep >= 3 & DailyAssessment.partial_pressure_arterial_oxygen - before_prev_peep >= 3)) %>% 
+    select(patient_id, diff_date = DailyAssessment.date_of_daily_assessment) %>% as.data.table()
+   
+  ##The condition 4 Culture BAL or Sputum with cfu >= 10000 (Some input "Sputum" even patient have MV on)
+  
+  culture_check <- 
+    daily_data %>%
+    select(patient_id, starts_with("DailyAssessment.positive_culture"), 
+           starts_with("DailyAssessment.culture_report"),
+           starts_with("DailyAssessment.culture_date"), starts_with("DailyAssessment.type_of_culture"), starts_with("DailyAssessment.cfu")) %>% 
+    mutate_at(vars(starts_with("DailyAssessment.culture_date")), as.Date)
+  
+  culture_check <- as.data.table(culture_check)
+  
+  culture_check_long <- 
+    melt(culture_check, 
+         measure = patterns("^DailyAssessment.positive_culture","^DailyAssessment.culture_date", 
+                            "^DailyAssessment.culture_report",
+                            "^DailyAssessment.type_of_culture", "^DailyAssessment.cfu"),
+         value.name = c("DailyAssessment.positive_culture","DailyAssessment.culture_date", 
+                        "DailyAssessment.culture_report",
+                        "DailyAssessment.type_of_culture", "DailyAssessment.cfu")) %>% 
+  	filter(!is.na(DailyAssessment.culture_date))
+  
+  
+  # Joining to antibiotic and eligibility. (need to sustain 2 calendar days) change the difftime() (back and forward)
+  ivac <- ivac_eligible %>% 
+  	left_join(fever, by = c("patient_id")) %>% 
+  	left_join(diffs, by = c("patient_id")) %>% 
+  	left_join(anti_commenced, by = c("patient_id", "eligible_date" = "antibiotic_commenced_date")) %>% 
+  	left_join(culture_check_long, by = c("patient_id")) %>%
+    filter(antibiotic_commenced == 1L) %>% #Registry code choose antibiotics used after eligible_date (but this will choose on eligible_date because we already shift 1 day forward on the ivac_eligible())
+    filter(difftime(infection_date, eligible_date, unit = "days") >= 0) %>%
+  	#diff_date happen 2 days after eligible_date because sustaining oxygen worsening for 2 days
+    filter(difftime(diff_date, eligible_date, unit = "days") >= 2) %>%
+  	filter((difftime(DailyAssessment.culture_date, eligible_date, unit = "days") >= 0 & DailyAssessment.type_of_culture %in% c("BAL", "Sputum") & DailyAssessment.cfu >= 10000) | Disease == "COVID-19") %>% 
+    group_by(patient_id) %>% 
+    summarise(ivac = 1L)
+  
+ ##Clinical VAP (filter the days before identifying VAP)
+  
+  daily_table <- daily_data %>% 
+		select(patient_id, DailyAssessment.date_of_daily_assessment, DailyAssessment.temperature, DailyAssessment.lowest_wcc, DailyAssessment.highest_wcc, DailyAssessment.oxygen_saturation, starts_with("DailyAssessment.infection"), starts_with("DailyAssessment.source"), starts_with("DailyAssessment.hos_acquired"), starts_with("DailyAssessment.type_of_newculture"), newinfiltrate, cultureobtain) %>% 
+		left_join(ivac_eligible, by = "patient_id") %>%
+		filter(DailyAssessment.date_of_daily_assessment >= eligible_date)
+  
+	drtreat <- daily_table %>% 
+		select(patient_id, DailyAssessment.date_of_daily_assessment, starts_with("DailyAssessment.infection"), starts_with("DailyAssessment.source"), starts_with("DailyAssessment.hos_acquired")) %>% 
+		as.data.table() %>% 
+		melt(measure = patterns("^DailyAssessment.infection", "^DailyAssessment.source", "^DailyAssessment.hos_acquired"),
+				 value.name = c("DailyAssessment.infection", "DailyAssessment.source", "DailyAssessment.hos_acquired")) %>% 
+		filter(!DailyAssessment.infection %in%  c("", "None", NA)) %>%
+		rename(date_hai = DailyAssessment.date_of_daily_assessment) %>% 
+		filter(DailyAssessment.source == "Respiratory System Infection" & DailyAssessment.hos_acquired == 1L) %>% 
+		unique()
+	
+	xray <- daily_table %>% 
+		select(patient_id, DailyAssessment.date_of_daily_assessment, newinfiltrate) %>% 
+		filter(newinfiltrate == 1L) %>% 
+		rename(date_xray = DailyAssessment.date_of_daily_assessment)
+	
+	dailyassess <- daily_table %>% 
+		select(patient_id, DailyAssessment.date_of_daily_assessment, DailyAssessment.oxygen_saturation) %>% 
+		unique()
+
+	##Every subset already filtered after the eligible date, only filter eligible date for the data from IVAC
+	
+	clinicalvap <- dailyassess %>% 
+		left_join(ivac_eligible, by = c("patient_id")) %>%
+		filter(DailyAssessment.date_of_daily_assessment >= eligible_date) %>% 
+		left_join(fever, by = c("patient_id")) %>% #this fever dataframe has not been filtered for date
+		filter(infection_date >= eligible_date) %>% 
+		left_join(anti_commenced, by = c("patient_id", "DailyAssessment.date_of_daily_assessment" = "antibiotic_commenced_date")) %>%
+		left_join(xray, by = c("patient_id")) %>% 
+		filter((difftime(date_xray, infection_date, units = "days") >= 0 & difftime(date_xray, infection_date, units = "days") <= 2) | (difftime(infection_date, date_xray, units = "days") >= 0 & difftime(infection_date, date_xray, units = "days") <= 2)) %>% 
+		filter(antibiotic_commenced == 1L & (DailyAssessment.oxygen_saturation < 95 | newinfiltrate == 1L)) %>% 
+		left_join(drtreat, by = c("patient_id")) %>% 
+		filter(DailyAssessment.hos_acquired == 1L & ((difftime(date_hai, infection_date, units = "days") >= 0 & difftime(date_hai, infection_date, units = "days") <= 2) | (difftime(infection_date, date_hai, units = "days") >= 0 & difftime(infection_date, date_hai, units = "days") <= 2)))  %>% 
+		group_by(patient_id) %>%
+		summarise(cVAP = 1L)
+	
+	##Summary table
+
+	fever_table <- fever_tb %>% 
+		group_by(patient_id) %>% 
+		summarise(temhyper = n_distinct(patient_id[DailyAssessment.temperature > 38], na.rm = TRUE),
+							temhypo = n_distinct(patient_id[DailyAssessment.temperature < 36], na.rm = TRUE),
+							wcchyper = n_distinct(patient_id[DailyAssessment.lowest_wcc > 12 | DailyAssessment.highest_wcc > 12], na.rm = TRUE),
+							wcchypo = n_distinct(patient_id[DailyAssessment.lowest_wcc < 4 | DailyAssessment.highest_wcc < 4], na.rm = TRUE))
+	
+	
+	culture_table <- culture_check_long %>% 
+		filter(DailyAssessment.type_of_culture %in% c("BAL", "Sputum")) %>% 
+		mutate(growth = if_else(DailyAssessment.culture_report == "Growth", 1L, 0L, 0L),
+					 cfu = if_else(DailyAssessment.cfu >= 10000, 1L, 0L, 0L)) %>% 
+		select(patient_id, growth, cfu) %>% 
+		group_by(patient_id) %>% 
+		filter(cfu == max(cfu)) %>% 
+		filter(growth == max(growth)) %>% 
+		unique()
+	
+	spo2 <- daily_table %>%
+		select(patient_id, DailyAssessment.oxygen_saturation) %>% 
+		filter(DailyAssessment.oxygen_saturation < 95) %>% 
+		group_by(patient_id) %>% 
+		summarise(spo2 = 1L)
+	
+	summary_tb <- ivac_eligible %>% 
+		select(patient_id) %>% 
+		distinct(patient_id) %>% 
+		left_join(ivac, by = "patient_id") %>% 
+		left_join(clinicalvap, by = "patient_id") %>% 
+		left_join(diffs[!duplicated(diffs$patient_id),], by = "patient_id") %>% #worsening oxygen
+		mutate(diff_date = case_when(!is.na(diff_date) ~ 1L,
+    												TRUE ~ 0L)) %>% 
+		left_join(anti_commenced[!duplicated(anti_commenced$patient_id),-2], by = "patient_id") %>% 
+		left_join(fever_table, by = "patient_id") %>%
+		left_join(xray[!duplicated(xray$patient_id), -2], by = "patient_id") %>% #xray new infiltrate
+		left_join(culture_table, by = "patient_id") %>%# culture growth with cfu > 10000
+		left_join(spo2, by = "patient_id") %>% 
+		left_join(drtreat[!duplicated(drtreat$patient_id), c(1,6)]) %>% 
+		rename(hos_acquired = DailyAssessment.hos_acquired) %>%
+		replace(is.na(.), 0L)
+	
+	Admission <- admission_data %>% 
+		select(patient_id, Disease, Admission.age, Admission.gender, hos_disch_status, los:mech_vent, antibiotics) %>% 
+		filter(patient_id %in% ivac_eligible$patient_id) %>% 
+		left_join(summary_tb, by = "patient_id")
+	Admission
+}
+
+
+
+vaptb <- ivac_calculation(admission_data, daily_data) %>% mutate(Disease = case_when(Disease == "COVID-19" ~ "COVID-19",
+																																 TRUE ~ "Others"))
+
+##Use this for faster
+
+#Admission <- Admission %>% mutate(Disease = case_when(Disease == "COVID-19" ~ "COVID-19",
+																										#	TRUE ~ "Others"))
+
+
+resultVAP <- vaptb %>% select(-patient_id) %>% tbl_summary(by = Disease,
+																	 missing = "no",
+																	 label = list(Admission.age ~ "Age, Median (IQR)",
+																	 						 Admission.gender ~ "Gender, n(%)",
+																							 hos_disch_status ~ "Hospital discharge status, n(%)",
+																							 los ~ "Lengh of ICU stay, Median (IQR)",
+																							 hos_los ~ "Length of hospital stay, Median (IQR)",
+																							 mech_vent ~ "Mechanical vent on admission, n(%)",
+																							 antibiotics ~ "Antibiotics on admission, n(%)",
+																							 ivac ~ "PVAP, n(%)",
+																							 cVAP ~ "Clinical VAP, n(%)",
+																							 diff_date ~ "Worsening oxygen, n(%)",
+																							 antibiotic_commenced ~ "Antibiotics used daily, n(%)",
+																							 temhyper ~ "Temperature > 38\u00B0C , n(%)",
+																							 temhypo ~ "Temperature < 36\u00B0C , n(%)",
+																							 wcchyper ~ "White blood cell count > 12000, n(%)",
+																							 wcchypo ~ "White blood cell count < 4000, n(%)",
+																							 newinfiltrate ~ "New infiltrate on X-ray, n(%)",
+																							 growth ~ "BAL growth culture, n(%)",
+																							 cfu ~ "Growth culture cfu \U2265 10\u2074",
+																							 spo2 ~ "SPO2 < 95",
+																							 hos_acquired ~ "Treated as HAIs")) %>%
+	add_p(pvalue_fun = ~ style_pvalue(.x, digits = 2)) %>%
+	add_overall() %>%
+  modify_caption("**Table 1. Ventilator Associated Pneumonia Characteristics**") %>% as_gt() %>% 
+	opt_table_font(font = list("Serif"))
+
+resultVAP
+library(webshot2)
+#gtsave(resultVAP, "VAP result.png", "C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis/Antibiotics")
+
+discharge <- admission_data %>% 
+	select(patient_id, Discharge.discharge_destination, Discharge.discharge_note, Disease) %>% 
+	filter(patient_id %in% vaptb$patient_id) %>% 
+	mutate(diesoon = if_else(Discharge.discharge_destination == "Discharge home for end of life care" | Discharge.discharge_note %in% c("Die as soon", "Died as soon"), 1L, 0L, 0L),
+				 Disease = if_else(Disease != "COVID-19", "Others", Disease, "NA"))
+
+discharge %>% select(Disease, diesoon) %>% tbl_summary(by = Disease) %>% add_p() %>% add_overall()
+
+##Antibiotic at admission
+
+disorder <- admission_data %>% 
+	select(patient_id, Disease) %>% 
+	filter(patient_id %in% vaptb$patient_id)
+
+antiadmission <- admission_data %>% select(patient_id, AdmissionAssessment.name_of_the_antibiotic:AdmissionAssessment.name_of_the_antibiotic_other) %>% filter(patient_id %in% vaptb$patient_id) %>% as.data.table()
+
+##need to turn to data.table before using melt
+
+antiadmission <- antiadmission %>% melt(measure = patterns("^AdmissionAssessment.name_of_the_antibiotic"), value.name = "Antibiotic") %>% filter(!Antibiotic %in% c("Metronidazole(Flagyl)", ""))
+
+antiadmission <- antiadmission[!duplicated(antiadmission$patient_id),]
+
+antiadmission <- antiadmission[!is.na(antiadmission$Antibiotic),]
+
+check_anti_long <- 
+    melt(check_anti, 
+         measure = patterns("^DailyAssessment.name_of_the_antibiotic"),
+         value.name = c("DailyAssessment.name_of_the_antibiotic"))
+
+fio2_peep <- daily_data %>% 
+    group_by(patient_id) %>%
+    mutate(prev_fio2 = lag(DailyAssessment.fraction_inspired_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+    			 before_prev_fio2 = lag(lag(DailyAssessment.fraction_inspired_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment), n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+           # NOT A MISTAKE. PEEP is stored in this variable at the moment. Check and fix later. 
+           prev_peep = lag(DailyAssessment.partial_pressure_arterial_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment),
+    			 before_prev_peep = lag(lag(DailyAssessment.partial_pressure_arterial_oxygen, n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment), n = 1L,
+                           order_by = DailyAssessment.date_of_daily_assessment)) %>%
+  	select(patient_id, DailyAssessment.date_of_daily_assessment, DailyAssessment.fraction_inspired_oxygen, DailyAssessment.partial_pressure_arterial_oxygen, prev_fio2:before_prev_peep) %>% 
+  	filter((DailyAssessment.fraction_inspired_oxygen - prev_fio2 >= 0.2 & DailyAssessment.fraction_inspired_oxygen - before_prev_fio2 >= 0.2)
+           | (DailyAssessment.partial_pressure_arterial_oxygen - prev_peep >= 3 & DailyAssessment.partial_pressure_arterial_oxygen - before_prev_peep >= 3)) %>% 
+	filter(DailyAssessment.fraction_inspired_oxygen - prev_fio2 >= 0.2 & DailyAssessment.fraction_inspired_oxygen - before_prev_fio2 >= 0.2)
+
+##Daily antibiotics
+
+antidaily <- select(daily_data, patient_id, c(starts_with("DailyAssessment.name_of_the_antibiotic"))) %>% as.data.table()
+
+antidaily <-  melt(antidaily, measure = patterns("^DailyAssessment.name_of_the_antibiotic"),
+									 value.name = "antibiotic")
+
+antidaily <- filter(antidaily, !antibiotic %in% c("Metronidazole(Flagyl)", "")) %>% unique()
+
+commonanti <- antidaily %>% 
+	select(antibiotic) %>% 
+	group_by(antibiotic) %>% 
+	summarise(No. = n()) %>%
+  mutate(freq = round(No. / sum(No.), 3)) %>% 
+  arrange(desc(freq))
+write_xlsx(commonanti, "Common antibiotics used.xlsx")
+
+organism <- select(daily_data, patient_id, c(starts_with("DailyAssessment.type_of_culture"), starts_with("DailyAssessment.organism"))) %>% as.data.table() %>%
+	melt(measure = patterns(c("^DailyAssessment.type_of_culture", "^DailyAssessment.organism")),
+															value.name = c("Type", "Organism")) %>%
+	filter(Type == "BAL" & Organism != "") %>% 
+	select(organism, -variable) %>% 
+	unique(organism)
+
+cultureorga <- organism %>% 
+	select(Organism) %>% 
+	group_by(Organism) %>% 
+	summarise(No. = n()) %>%
+  mutate(freq = round(No. / sum(No.), 3)) %>% 
+  arrange(desc(freq))
+
+write_xlsx(cultureorga, "Common organism cultured.xlsx")
+
+#%>% melt(measure = patterns("^AdmissionAssessment.name_of_the_antibiotic"), value.name = "Antibiotic") %>% filter(!Antibiotic %in% c("Metronidazole(Flagyl)", ""))
+
+```	
+
+IVAC = 63
+PVAP = 19
+clinical VAP = 57
+Alive = 173 (48 Die as soon)
+
+```{r data processing, warning=FALSE, eval=FALSE}
+##Download code
+codefile <- list.files(path = "C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis/Antibiotics",
+												 recursive = TRUE,
+												 pattern = "\\.R$",
+												 full.names = TRUE)
+
+lapply(codefile, function(x) source(x))
+
+```
+
+```{r automatic generate report, eval=F}
+config <- list(country = "VietNam",
+               registry = "NICR",
+               region = "Asia",
+               data_source = "external",
+               postgres_host = "localhost", 
+               postgres_db = "postgres", 
+               postgres_user = "postgres", 
+               postgres_password = "postgres",
+               nicst_domain = "vietnam.icuregistry.nicst.net",
+               nicst_user = "",
+               nicst_password = "",
+               python_path = "C:/Users/thaontp/AppData/Local/Programs/Python/Python39/python.exe",
+               start_date = "2023-12-01",
+               end_date = "2023-12-31",
+               gap = "day", # One of "month", "week", "day"
+               unit_id = c("all"), #can also be 'all' to generate all units. Including "registry_wide" will also generate a single report containing data from all units. 
+               snomed_mapping_path = "C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis/Antibiotics",
+               output_path = "C:/Thaontp/Thao/Registry/COVID2022/Antibiotics analysis/Antibiotics")               
+               
+generate_reports(config)
+```
+
+
